@@ -1,0 +1,7 @@
+bin/
+vendor/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
