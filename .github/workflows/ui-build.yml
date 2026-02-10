@@ -1,0 +1,27 @@
+name: UI + Go build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+      - name: Install frontend dependencies
+        run: npm ci --prefix web
+      - name: Build frontend
+        run: npm run build --prefix web
+      - name: Build Go
+        run: go build -v ./...
