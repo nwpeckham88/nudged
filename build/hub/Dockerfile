@@ -1,12 +1,15 @@
 FROM golang:1.21-alpine AS builder
 WORKDIR /src
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git nodejs npm
 
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# build web UI so it can be embedded
+RUN cd web && npm ci --silent && npm run build --silent && mkdir -p ../internal/webui/dist && cp -r dist/* ../internal/webui/dist/ || true
 
 # Build a static-ish binary
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/nudged ./cmd/nudged

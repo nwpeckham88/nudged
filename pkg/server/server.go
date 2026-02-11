@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"nudged/internal/hub"
+	webui "nudged/internal/webui"
 )
 
 // Start runs the server core. It returns when the provided context is
@@ -57,6 +58,15 @@ func Start(ctx context.Context, addr string) error {
 	reg := &Registry{agents: make(map[string]*Agent)}
 
 	mux := http.NewServeMux()
+	// serve embedded web UI at /ui/
+	if uiHandler, err := webui.Handler(); err == nil {
+		mux.Handle("/ui/", http.StripPrefix("/ui/", uiHandler))
+		mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/ui/", http.StatusFound)
+		})
+	} else {
+		fmt.Printf("webui handler unavailable: %v\n", err)
+	}
 	// health endpoints: /healthz and /health
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
