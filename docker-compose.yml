@@ -1,0 +1,26 @@
+version: "3.8"
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: build/hub/Dockerfile
+    image: nudged-hub:local
+    ports:
+      - "8080:8080"
+    environment:
+      - NUDGED_HUB_SECRET=${NUDGED_HUB_SECRET:-}
+
+  agent:
+    build:
+      context: .
+      dockerfile: examples/agent-go/Dockerfile
+    image: nudged-agent:local
+    depends_on:
+      - hub
+    environment:
+      - HUB_ADDR=ws://hub:8080/ws/register
+      - AGENT_ID=agent-local
+      - AGENT_NAME=agent-local
+      - AGENT_ADDR=127.0.0.1:59999
+      - AGENT_APPS=demo
+    restart: unless-stopped

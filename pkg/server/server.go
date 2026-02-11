@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,11 +41,12 @@ func Start(ctx context.Context, addr string) error {
 	// start HTTP status endpoint
 	// simple in-memory registry for Agents and Apps
 	type Agent struct {
-		ID       string   `json:"id"`
-		Name     string   `json:"name"`
-		Addr     string   `json:"addr"`
-		Apps     []string `json:"apps"`
-		LastSeen int64    `json:"last_seen"`
+		ID       string          `json:"id"`
+		Name     string          `json:"name"`
+		Addr     string          `json:"addr"`
+		Apps     []string        `json:"apps"`
+		LastSeen int64           `json:"last_seen"`
+		Conn     *websocket.Conn `json:"-"`
 	}
 
 	type Registry struct {
@@ -53,9 +57,14 @@ func Start(ctx context.Context, addr string) error {
 	reg := &Registry{agents: make(map[string]*Agent)}
 
 	mux := http.NewServeMux()
+	// health endpoints: /healthz and /health
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	// POST /agents - register or update an agent
@@ -136,7 +145,7 @@ func Start(ctx context.Context, addr string) error {
 			return
 		}
 
-		ag := &Agent{ID: a.ID, Name: a.Name, Addr: a.Addr, Apps: a.Apps, LastSeen: time.Now().Unix()}
+		ag := &Agent{ID: a.ID, Name: a.Name, Addr: a.Addr, Apps: a.Apps, LastSeen: time.Now().Unix(), Conn: conn}
 		reg.mu.Lock()
 		reg.agents[ag.ID] = ag
 		reg.mu.Unlock()
@@ -155,13 +164,110 @@ func Start(ctx context.Context, addr string) error {
 				if err := c.ReadJSON(&msg); err != nil {
 					return
 				}
+
+				// Update last seen
 				reg.mu.Lock()
 				if ag, ok := reg.agents[id]; ok {
 					ag.LastSeen = time.Now().Unix()
 				}
 				reg.mu.Unlock()
+
+				// If agent reports status for an app, publish it to the hub so waiting clients can be notified.
+				if t, ok := msg["type"].(string); ok && t == "status" {
+					if appName, ok := msg["app"].(string); ok {
+						h.Publish(hub.Message{Topic: "app:" + appName, Payload: msg, From: id})
+					}
+				}
 			}
 		}(ag.ID, conn)
+	})
+
+	// Notification websocket for splash clients: /ws/notify?app=NAME
+	mux.HandleFunc("/ws/notify", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		app := q.Get("app")
+		if app == "" {
+			http.Error(w, "missing app", http.StatusBadRequest)
+			return
+		}
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		sub, unsub := h.Subscribe("app:" + app)
+		defer func() {
+			unsub()
+			c.Close()
+		}()
+
+		// forward any messages for the app to the websocket client
+		for msg := range sub {
+			_ = c.WriteJSON(msg.Payload)
+		}
+	})
+
+	// Core HTTP proxy: inspect Host header (subdomain) and proxy to registered agent
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		// strip port if present
+		if idx := strings.Index(host, ":"); idx != -1 {
+			host = host[:idx]
+		}
+
+		// assume first label is the app name: app.example.com
+		parts := strings.Split(host, ".")
+		if len(parts) == 0 {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		app := parts[0]
+
+		// find an agent that advertises this app
+		reg.mu.RLock()
+		var target *Agent
+		for _, a := range reg.agents {
+			for _, ap := range a.Apps {
+				if ap == app {
+					target = a
+					break
+				}
+			}
+			if target != nil {
+				break
+			}
+		}
+		reg.mu.RUnlock()
+
+		if target == nil {
+			http.Error(w, "service not found", http.StatusNotFound)
+			return
+		}
+
+		// prepare reverse proxy to agent address
+		targetURL := &url.URL{Scheme: "http", Host: target.Addr}
+		proxy := httputil.NewSingleHostReverseProxy(targetURL)
+
+		// if proxying fails (e.g., agent container down), we trigger a wake and show splash
+		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+			// send WAKE to the agent if websocket connection is present
+			reg.mu.RLock()
+			conn := target.Conn
+			reg.mu.RUnlock()
+			wakeMsg := map[string]any{"type": "wake", "app": app}
+			if conn != nil {
+				_ = conn.WriteJSON(wakeMsg)
+			}
+			// also publish to local hub for any internal subscribers
+			h.Publish(hub.Message{Topic: "wake:" + app, Payload: wakeMsg, From: "hub"})
+
+			// respond with splash HTML that listens for readiness
+			rw.Header().Set("Content-Type", "text/html; charset=utf-8")
+			rw.WriteHeader(http.StatusOK)
+			splash := `<!doctype html><html><head><meta charset="utf-8"><title>Waking ` + app + `</title></head><body><h1>Waking ` + app + `…</h1><script>let ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/notify?app=` + app + `');ws.onmessage=e=>{try{let m=JSON.parse(e.data);if(m.state==='READY'){location.reload();}}catch(err){};};</script></body></html>`
+			_, _ = rw.Write([]byte(splash))
+		}
+
+		proxy.ServeHTTP(w, r)
 	})
 
 	srv := &http.Server{Addr: addr, Handler: mux}

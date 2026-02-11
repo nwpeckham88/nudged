@@ -1,3 +1,6 @@
+//go:build embed
+// +build embed
+
 package main
 
 import (
