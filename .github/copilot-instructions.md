@@ -2,6 +2,51 @@
 
 # Nudged — Copilot Instructions (concise)
 
+Purpose: provide AI coding agents the minimal, precise context to be productive in this repository.
+
+## Project Guidelines
+
+### Code Style
+- Go: use `gofmt`/`go vet`. Follow existing patterns in `pkg/` and `cmd/`.
+- Frontend: follow `web/` configs (`svelte.config.js`, `tsconfig.json`, `web/package.json`). Run `npm run lint` and `npm run dev` for checks.
+
+### Architecture
+- Hub (control/ingress): `cmd/nudged-hub/main.go` (run with `-serve`). Core HTTP and websocket logic is in `pkg/server/server.go`.
+- Agent: `cmd/nudged-agent/main.go` — agents open a control WebSocket to `/ws/register` and advertise `apps`.
+- Pub/sub: use `internal/hub/hub.go` for cross-component events and in-memory testing.
+
+### Build & Test (commands to run)
+- Build hub: `go build ./cmd/nudged-hub`
+- Run hub (local): `./nudged-hub -serve` or `go run ./cmd/nudged-hub -serve`
+- Build agent: `go build ./cmd/nudged-agent`
+- Run tests: `go test ./...`
+- Frontend: `cd web && npm install` then `npm run dev` / `npm run build` / `npm run preview`
+
+### Project Conventions (concrete)
+- Agent-provided `addr` is authoritative; do not rewrite it without updating `docs/NUDGED_DEISGN.md`.
+- Registry state is in-memory. Treat `pkg/server/Registry` as ephemeral for tests and dev.
+- Preserve the wake/splash proxy flow: failures trigger a `wake` message and a splash page (see `pkg/server/server.go`).
+
+### Integration Points
+- HTTP endpoints: `POST /agents`, `GET /apps`, and proxy root at `GET /` (host-based routing).
+- WebSockets: `/ws/register` (agent control) and `/ws/notify?app=NAME` (splash notifications).
+- Frontend tooling and MCP guidance: `web/AGENTS.md`.
+
+### Security Notes
+- `NUDGED_HUB_SECRET` secures `/ws/register`; hub expects header `X-Nudged-Secret`.
+- Treat agent `addr` and control messages as sensitive — any change in trust model requires documentation updates and review.
+
+## Quick References (where to look)
+- Core server: `pkg/server/server.go`
+- Pub/sub and tests: `internal/hub/hub.go`, `internal/hub/hub_test.go`
+- Design & rationale: `docs/NUDGED_DEISGN.md`
+- Frontend MCP rules: `web/AGENTS.md`
+
+If you'd like more examples, unit-test snippets, or specific grep/search targets to include, tell me which section to expand.
+<!-- Copilot / AI agent instructions for contributors working on Nudged -->
+
+# Nudged — Copilot Instructions (concise)
+
 Purpose: give AI coding agents the minimal, precise context to be productive in this repository.
 
 - **Big picture**: Nudged is a hub-and-agent system (see `docs/NUDGED_DEISGN.md`). The Hub (`cmd/nudged`) is the control/ingress plane; Agents connect to the Hub over a persistent WebSocket and advertise `Apps`. The Hub reverse-proxies HTTP to agent addresses and implements a "hold & wake" splash flow when a service is unavailable.

@@ -1,4 +1,4 @@
-package server
+package hub
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"nudged/internal/hub"
 	webui "nudged/internal/webui"
 )
 
@@ -21,7 +20,7 @@ import (
 // cancelled (graceful shutdown).
 func Start(ctx context.Context, addr string) error {
 	fmt.Println("starting server and hub")
-	h := hub.New()
+	h := New()
 
 	// quick smoke: subscribe and publish
 	sub, unsub := h.Subscribe("_internal_smoke")
@@ -29,7 +28,7 @@ func Start(ctx context.Context, addr string) error {
 
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		h.Publish(hub.Message{Topic: "_internal_smoke", Payload: "ok", From: "server"})
+		h.Publish(Message{Topic: "_internal_smoke", Payload: "ok", From: "server"})
 	}()
 
 	select {
@@ -178,7 +177,7 @@ func Start(ctx context.Context, addr string) error {
 				// If agent reports status for an app, publish it to the hub so waiting clients can be notified.
 				if t, ok := msg["type"].(string); ok && t == "status" {
 					if appName, ok := msg["app"].(string); ok {
-						h.Publish(hub.Message{Topic: "app:" + appName, Payload: msg, From: id})
+						h.Publish(Message{Topic: "app:" + appName, Payload: msg, From: id})
 					}
 				}
 			}
@@ -261,7 +260,7 @@ func Start(ctx context.Context, addr string) error {
 				_ = conn.WriteJSON(wakeMsg)
 			}
 			// also publish to local hub for any internal subscribers
-			h.Publish(hub.Message{Topic: "wake:" + app, Payload: wakeMsg, From: "hub"})
+			h.Publish(Message{Topic: "wake:" + app, Payload: wakeMsg, From: "hub"})
 
 			// respond with splash HTML that listens for readiness and allows a manual wake request
 			rw.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -301,7 +300,7 @@ func Start(ctx context.Context, addr string) error {
 			}
 		case <-ticker.C:
 			// heartbeat publish (non-blocking to subscribers)
-			h.Publish(hub.Message{Topic: "heartbeat", Payload: time.Now(), From: "server"})
+			h.Publish(Message{Topic: "heartbeat", Payload: time.Now(), From: "server"})
 		}
 	}
 }

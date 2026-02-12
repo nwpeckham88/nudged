@@ -1,4 +1,4 @@
-package server
+package hub
 
 import (
 	"net/http"
@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"nudged/internal/hub"
+    
 )
 
 // Test that when the reverse proxy cannot reach the agent, the server
 // publishes a wake event for the requested app.
 func TestProxyWakePublishesWakeEvent(t *testing.T) {
-	h := hub.New()
+	h := New()
 
 	// simple in-test registry type mirroring server.Registry/Agent
 	type Agent struct {
@@ -75,7 +75,7 @@ func TestProxyWakePublishesWakeEvent(t *testing.T) {
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
 		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 			wakeMsg := map[string]any{"type": "wake", "app": app}
-			h.Publish(hub.Message{Topic: "wake:" + app, Payload: wakeMsg, From: "test"})
+			h.Publish(Message{Topic: "wake:" + app, Payload: wakeMsg, From: "test"})
 			rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 			rw.WriteHeader(http.StatusOK)
 			_, _ = rw.Write([]byte("splash"))
