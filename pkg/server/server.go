@@ -263,10 +263,10 @@ func Start(ctx context.Context, addr string) error {
 			// also publish to local hub for any internal subscribers
 			h.Publish(hub.Message{Topic: "wake:" + app, Payload: wakeMsg, From: "hub"})
 
-			// respond with splash HTML that listens for readiness
+			// respond with splash HTML that listens for readiness and allows a manual wake request
 			rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 			rw.WriteHeader(http.StatusOK)
-			splash := `<!doctype html><html><head><meta charset="utf-8"><title>Waking ` + app + `</title></head><body><h1>Waking ` + app + `…</h1><script>let ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/notify?app=` + app + `');ws.onmessage=e=>{try{let m=JSON.parse(e.data);if(m.state==='READY'){location.reload();}}catch(err){};};</script></body></html>`
+			splash := `<!doctype html><html><head><meta charset="utf-8"><title>Waking ` + app + `</title></head><body><h1>Service: ` + app + `</h1><p>The machine hosting this app appears to be powered off or unreachable. Click "Wake" to attempt to wake the host; this page will automatically reload when the service reports ready.</p><button id="wake">Wake</button> <span id="status"></span><script>let ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/notify?app=` + app + `');ws.onmessage=e=>{try{let m=JSON.parse(e.data);if(m.state==='READY'){location.reload();}else{document.getElementById('status').textContent=JSON.stringify(m);}}catch(err){};};document.getElementById('wake').onclick=function(){var btn=this;btn.disabled=true;document.getElementById('status').textContent='Sending wake request...';fetch('/wake?app=` + app + `',{method:'POST'}).then(res=>{if(res.ok||res.status===202){document.getElementById('status').textContent='Wake request sent.'}else{document.getElementById('status').textContent='Wake request failed: '+res.status;btn.disabled=false}}).catch(e=>{document.getElementById('status').textContent='Error: '+e;btn.disabled=false})};</script></body></html>`
 			_, _ = rw.Write([]byte(splash))
 		}
 

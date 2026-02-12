@@ -87,6 +87,9 @@ Recommended Nudged flow (Hub):
 ## 8. Suggested repo changes
 - `pkg/wol/wol.go` — implement `Send(mac string, iface string, bcast string, port int) error` and helpers to compute broadcast and validate NIC support.
 - `pkg/server/wake_handler.go` — expose `POST /agents/{id}/wake` or `POST /wake` API that: validates auth, looks up agent MAC/relay, calls `pkg/wol` or forwards to registered relay, and orchestrates retries.
+
+- Waiting page: update the splash/waiting HTML to inform the user that the host appears to be powered off and provide a "Wake" button that sends `POST /wake?app=NAME`. The splash should show status updates from the hub and automatically reload when the agent reports the app is READY.
+
 - `scripts/wol-send` — small operator CLI.
 - `docs/WOL.md` — this document.
 
