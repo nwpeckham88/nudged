@@ -1,0 +1,50 @@
+sequenceDiagram
+    autonumber
+    actor User as User (Browser)
+    participant Caddy as Ingress (Caddy)
+    participant Hub as Nudged Hub
+    participant Agent as Nudged Agent
+    participant Docker as Docker Daemon
+    participant Container as App (e.g., Plex)
+
+    Note over Hub, Agent: Section 3.1: Control Plane (Persistent WebSocket)
+    Agent->>Hub: WS Handshake (Auth Header)
+    Agent->>Hub: REGISTER { "apps": ["plex"], "ip": "100.64.0.5" }
+    Hub-->>Agent: ACK
+
+    Note over User, Container: Section 4.2: The "Hold & Wake" Flow
+
+    User->>Caddy: HTTP GET https://plex.kn8design.com
+    Caddy->>Hub: Forward Request
+    
+    rect rgb(255, 245, 235)
+        Note over Hub: App State = STOPPED
+        Hub-->>User: HTTP 200 OK (Serve Splash Screen HTML)
+        Note right of User: Browser displays "Waking Up..."<br/>& connects to Hub via WS
+    end
+
+    Hub->>Agent: WS Message: WAKE { "app": "plex" }
+    
+    rect rgb(230, 240, 255)
+        Note right of Agent: Agent Processing
+        Agent->>Docker: POST /containers/plex/start
+        Docker-->>Agent: 204 No Content
+        
+        loop Health Check (Section 2.2)
+            Agent->>Container: GET http://localhost:32400
+            Container-->>Agent: Connection Refused / 200 OK
+        end
+    end
+
+    Agent->>Hub: WS Message: STATUS { "app": "plex", "state": "READY" }
+    
+    Hub->>User: WS Message: "Reload" (via Splash Screen socket)
+    
+    Note over User, Container: Section 3.2: Data Plane (Proxy)
+    
+    User->>Caddy: Browser Refreshes Page
+    Caddy->>Hub: Forward Request
+    Note over Hub: App State = RUNNING
+    Hub->>Agent: Reverse Proxy (HTTP over VPN)
+    Agent->>Container: Forward traffic to Port 32400
+    Container-->>User: App Content

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	webui "nudged/internal/webui"
+	webui "github.com/nwpeckham88/nudged/internal/webui"
 )
 
 // Start runs the server core. It returns when the provided context is

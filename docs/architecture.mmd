@@ -1,0 +1,44 @@
+graph TD
+    subgraph Public["Public Internet"]
+        User[User / Browser]
+    end
+
+    subgraph HubNode["Hub Server (Cloud/Primary)"]
+        Ingress[Caddy / Nginx]
+        HubBinary[("nudged-hub<br/>(Control Plane & Proxy)")]
+        Registry[("State Registry<br/>(Map[App]AgentIP)")]
+    end
+
+    subgraph AgentNode["HomeLab Node (VPN IP: 100.64.x.x)"]
+        AgentBinary[("nudged-agent")]
+        DockerSock[("/var/run/docker.sock")]
+        
+        subgraph Containers["Docker Network"]
+            App1[Plex]
+            App2[Request-Arr]
+        end
+    end
+
+    %% Connections
+    User -- HTTPS --> Ingress
+    Ingress -- HTTP --> HubBinary
+    HubBinary -- Read/Write --> Registry
+
+    %% Control Plane
+    AgentBinary -- "WebSocket (Persistent)<br/>Auth: HMAC" --> HubBinary
+    
+    %% Data Plane
+    HubBinary -- "HTTP Proxy (Data Plane)<br/>Target: VPN IP" --> AgentBinary
+    
+    %% Local Control
+    AgentBinary -- "Docker API<br/>(Start/Stop/Labels)" --> DockerSock
+    DockerSock -.-> App1
+    
+    %% Local Traffic
+    AgentBinary -- "Health Checks (curl)" --> App1
+    AgentBinary -- "Traffic Fwd" --> App1
+    
+    %% Styling
+    linkStyle 3 stroke:#f66,stroke-width:2px,color:red;
+    linkStyle 4 stroke:#66f,stroke-width:2px,color:blue;
+    

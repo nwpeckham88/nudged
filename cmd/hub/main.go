@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"nudged/pkg/server"
+	"github.com/nwpeckham88/nudged/pkg/server"
 )
 
 var version = "0.1.0"
