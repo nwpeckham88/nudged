@@ -12,7 +12,7 @@ services:
   agent:
     build:
       context: .
-      dockerfile: examples/agent-go/Dockerfile
+      dockerfile: build/agent/Dockerfile
     image: nudged-agent:local
     depends_on:
       - hub
@@ -20,8 +20,10 @@ services:
       - HUB_ADDR=ws://hub:8080/ws/register
       - AGENT_ID=agent-local
       - AGENT_NAME=agent-local
-      - AGENT_ADDR=testsvc:8082
+      - AGENT_ADDR=agent:8081
       - AGENT_APPS=testsvc
+    ports:
+      - "8081:8081"
     restart: unless-stopped
 
   testsvc:
@@ -35,3 +37,12 @@ services:
       - STARTUP_DELAY=${TESTSVC_STARTUP_DELAY:-0}
       - FLAKY_RATE=${TESTSVC_FLAKY_RATE:-0}
     restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "2015:2015"
+    depends_on:
+      - hub
