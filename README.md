@@ -1,17 +1,26 @@
 # Nudged
 
-Scaffold for the Nudged project (Hub & Agent orchestration prototype).
+Monorepo for Nudged (Hub, Agent, Svelte dashboard).
 
-Build:
+Build everything:
 
 ```sh
-go build ./cmd/nudged
+make
+```
+
+Build individual components:
+
+```sh
+make build-web        # builds web/build (Svelte)
+make build-hub        # builds bin/nudged-hub
+make build-agent      # builds bin/nudged-agent
+make build-webserver  # builds bin/webserver (embeds web/build)
 ```
 
 Run tests:
 
 ```sh
-go test ./...
+make test
 ```
 
 Next steps: split into `cmd/hub` and `cmd/agent`, implement WebSocket registration and Docker control.

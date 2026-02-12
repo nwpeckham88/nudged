@@ -31,13 +31,13 @@ RUN go mod download
 COPY . .
 # copy web build into source tree so server can serve it
 COPY --from=web-build /src/web/build /src/internal/webui/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -o /out/nudged ./cmd/nudged
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/nudged-hub ./cmd/nudged-hub
 
 # final image
 FROM alpine:3.18
-COPY --from=build /out/nudged /usr/local/bin/nudged
+COPY --from=build /out/nudged-hub /usr/local/bin/nudged-hub
 COPY --from=web-build /src/web/build /internal/webui/dist
-ENTRYPOINT ["/usr/local/bin/nudged","--serve"]
+ENTRYPOINT ["/usr/local/bin/nudged-hub","--serve"]
 ```
 
 ## Serving options & tradeoffs
