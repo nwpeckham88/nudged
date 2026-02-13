@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/nwpeckham88/nudged/pkg/server"
+	"github.com/nwpeckham88/nudged/internal/hub"
 )
 
 var version = "0.1.0"
@@ -30,7 +30,7 @@ func main() {
 		defer stop()
 
 		fmt.Printf("starting nudged server v%s\n", version)
-		if err := server.Start(ctx, ":8080"); err != nil {
+		if err := hub.Start(ctx, ":8080"); err != nil {
 			fmt.Fprintf(os.Stderr, "server failed: %v\n", err)
 			os.Exit(1)
 		}

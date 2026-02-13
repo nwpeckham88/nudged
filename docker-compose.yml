@@ -7,42 +7,35 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - NUDGED_HUB_SECRET=${NUDGED_HUB_SECRET:-}
+      - NUDGED_HUB_SECRET=devsecret
 
   agent:
     build:
       context: .
-      dockerfile: build/agent/Dockerfile
+      dockerfile: internal/agent/Dockerfile
     image: nudged-agent:local
     depends_on:
-      - hub
+      hub:
+        condition: service_healthy
     environment:
       - HUB_ADDR=ws://hub:8080/ws/register
-      - AGENT_ID=agent-local
-      - AGENT_NAME=agent-local
+      - AGENT_ID=agent-docker
+      - AGENT_NAME=agent-docker
       - AGENT_ADDR=agent:8081
-      - AGENT_APPS=testsvc
+      - NUDGED_HUB_SECRET=devsecret
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8081:8081"
     restart: unless-stopped
 
   testsvc:
-    build:
-      context: examples/test-service
-      dockerfile: Dockerfile
-    image: nudged-testsvc:local
+    image: nginx:alpine
     ports:
-      - "8082:8082"
-    environment:
-      - STARTUP_DELAY=${TESTSVC_STARTUP_DELAY:-0}
-      - FLAKY_RATE=${TESTSVC_FLAKY_RATE:-0}
+      - "8082:80"
+    labels:
+      - "nudged.enable=true"
+      - "nudged.name=testsvc"
+      - "nudged.port=8082"
     restart: unless-stopped
-
-  caddy:
-    image: caddy:2
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-    ports:
-      - "2015:2015"
-    depends_on:
-      - hub
+    stop_signal: SIGQUIT

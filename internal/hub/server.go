@@ -208,6 +208,53 @@ func Start(ctx context.Context, addr string) error {
 		}
 	})
 
+	// POST /wake?app=NAME - manually trigger a wake command
+	mux.HandleFunc("/wake", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		q := r.URL.Query()
+		app := q.Get("app")
+		if app == "" {
+			http.Error(w, "missing app", http.StatusBadRequest)
+			return
+		}
+
+		// find agent for app
+		reg.mu.RLock()
+		var target *Agent
+		for _, a := range reg.agents {
+			for _, ap := range a.Apps {
+				if ap == app {
+					target = a
+					break
+				}
+			}
+			if target != nil {
+				break
+			}
+		}
+		reg.mu.RUnlock()
+
+		if target == nil {
+			http.Error(w, "app not found", http.StatusNotFound)
+			return
+		}
+
+		// send WAKE
+		reg.mu.RLock()
+		conn := target.Conn
+		reg.mu.RUnlock()
+		wakeMsg := map[string]any{"type": "wake", "app": app}
+		if conn != nil {
+			_ = conn.WriteJSON(wakeMsg)
+		}
+		h.Publish(Message{Topic: "wake:" + app, Payload: wakeMsg, From: "hub"})
+
+		w.WriteHeader(http.StatusAccepted)
+	})
+
 	// Core HTTP proxy: inspect Host header (subdomain) and proxy to registered agent
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
