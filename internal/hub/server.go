@@ -52,14 +52,9 @@ func Start(ctx context.Context, addr string) error {
 
 	// start HTTP status endpoint
 	// simple in-memory registry for Agents and Apps
-	type Agent struct {
-		ID       string          `json:"id"`
-		Name     string          `json:"name"`
-		Addr     string          `json:"addr"`
-		Apps     []string        `json:"apps"`
-		LastSeen int64           `json:"last_seen"`
-		Conn     *websocket.Conn `json:"-"`
-	}
+	// Agent struct is now defined in types.go (to be created) or we move it to package scope in store.go
+	// For now, let's keep it here but we need to make it accessible to store.go or vice versa.
+	// Since store.go is in the same package, we can move the Agent struct definition to a common place or top level.
 
 	type Registry struct {
 		mu     sync.RWMutex
