@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,6 +25,7 @@ type Agent struct {
 	Secret    string
 	Docker    Docker
 	Apps      map[string]App
+	mu        sync.RWMutex
 	reconnect time.Duration
 }
 
@@ -75,8 +80,8 @@ func New(cfg Config) (*Agent, error) {
 func (a *Agent) Run(ctx context.Context) error {
 	log.Printf("starting agent %s (%s)", a.Name, a.ID)
 
-	// Start health server
-	go a.serveHealth()
+	// Start server (health + proxy)
+	go a.serve()
 
 	for {
 		select {
@@ -96,19 +101,49 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) serveHealth() {
-	// extract port from Addr
-	// ... simple implementation for now
+func (a *Agent) serve() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": a.ID, "status": "ok"})
 	})
-	
-	// Assume Addr is host:port, just listen on it
-	log.Printf("health listening on %s", a.Addr)
+
+	// Proxy logic: forward requests to the appropriate container
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if idx := strings.Index(host, ":"); idx != -1 {
+			host = host[:idx]
+		}
+
+		// assume subdomain matches app name
+		parts := strings.Split(host, ".")
+		appName := parts[0]
+
+		a.mu.RLock()
+		app, ok := a.Apps[appName]
+		a.mu.RUnlock()
+
+		if !ok {
+			http.Error(w, "app not found", http.StatusNotFound)
+			return
+		}
+
+		targetURL := &url.URL{
+			Scheme: "http",
+			Host:   fmt.Sprintf("%s:%s", app.ContainerName, app.Port),
+		}
+
+		proxy := httputil.NewSingleHostReverseProxy(targetURL)
+		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+			log.Printf("proxy error for %s: %v", appName, err)
+			http.Error(rw, "bad gateway", http.StatusBadGateway)
+		}
+		proxy.ServeHTTP(w, r)
+	})
+
+	log.Printf("agent server listening on %s", a.Addr)
 	if err := http.ListenAndServe(a.Addr, mux); err != nil {
-		log.Printf("health server failed: %v", err)
+		log.Printf("agent server failed: %v", err)
 	}
 }
 
@@ -120,11 +155,15 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	}
 	
 	appNames := make([]string, 0, len(apps))
+	
+	a.mu.Lock()
 	a.Apps = make(map[string]App)
 	for _, app := range apps {
 		appNames = append(appNames, app.Name)
 		a.Apps[app.Name] = app
 	}
+	a.mu.Unlock()
+	
 	log.Printf("found apps: %v", appNames)
 
 	u, err := url.Parse(a.HubAddr)
@@ -215,20 +254,23 @@ func (a *Agent) wakeApp(ctx context.Context, c *websocket.Conn, app App) {
 		return
 	}
 
-	// Wait for readiness (simple sleep + check running for now, eventually curl)
-	// TODO: Implement actual port check
+	// Wait for readiness (check TCP port)
 	for i := 0; i < 30; i++ {
+		// First check if container is running
 		running, err := a.Docker.IsRunning(ctx, app.ContainerID)
 		if err == nil && running {
-			// Send READY status
-			log.Printf("app %s is ready", app.Name)
-			_ = c.WriteJSON(map[string]any{
-				"type": "status",
-				"app":  app.Name,
-				"state": "READY",
-				"port":  app.Port,
-			})
-			return
+			// Then check if port is open
+			if a.checkPort(ctx, app) {
+				// Send READY status
+				log.Printf("app %s is ready", app.Name)
+				_ = c.WriteJSON(map[string]any{
+					"type": "status",
+					"app":  app.Name,
+					"state": "READY",
+					"port":  app.Port,
+				})
+				return
+			}
 		}
 		time.Sleep(1 * time.Second)
 	}
@@ -239,4 +281,20 @@ func (a *Agent) wakeApp(ctx context.Context, c *websocket.Conn, app App) {
 		"app":  app.Name,
 		"state": "TIMEOUT",
 	})
+}
+
+func (a *Agent) checkPort(ctx context.Context, app App) bool {
+	target := fmt.Sprintf("%s:%s", app.ContainerName, app.Port)
+	// If running in Mock mode, return true
+	if _, ok := a.Docker.(*MockDocker); ok {
+		return true
+	}
+
+	d := net.Dialer{Timeout: 1 * time.Second}
+	conn, err := d.DialContext(ctx, "tcp", target)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }

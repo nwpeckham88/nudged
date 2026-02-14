@@ -36,6 +36,6 @@ services:
     labels:
       - "nudged.enable=true"
       - "nudged.name=testsvc"
-      - "nudged.port=8082"
+      - "nudged.port=80"
     restart: unless-stopped
     stop_signal: SIGQUIT
