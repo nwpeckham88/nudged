@@ -21,11 +21,7 @@ func env(key, def string) string {
 func main() {
 	// allow a simple --help flag
 	hlp := flag.Bool("help", false, "show help")
-	flag.Parse()
-	if *hlp {
-		flag.Usage()
-		return
-	}
+	ver := flag.Bool("version", false, "print version")
 
 	cfg := agent.Config{
 		HubAddr: env("HUB_ADDR", "ws://localhost:8080/ws/register"),
@@ -34,6 +30,20 @@ func main() {
 		Addr:    env("AGENT_ADDR", "127.0.0.1:8081"),
 		Secret:  env("NUDGED_HUB_SECRET", ""),
 		Mock:    env("AGENT_MOCK", "false") == "true",
+	}
+
+	// Parse flags for explicit bind address, overriding env vars if provided
+	flag.StringVar(&cfg.Addr, "bind-addr", cfg.Addr, "address to bind to (host:port)")
+	flag.Parse()
+
+	if *hlp {
+		flag.Usage()
+		return
+	}
+
+	if *ver {
+		fmt.Println("0.1.0")
+		return
 	}
 
 	a, err := agent.New(cfg)
