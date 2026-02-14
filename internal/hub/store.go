@@ -3,10 +3,7 @@ package hub
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log/slog"
-	"os"
-	"time"
 
 	_ "modernc.org/sqlite"
 )
