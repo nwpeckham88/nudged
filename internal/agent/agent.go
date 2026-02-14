@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ type Agent struct {
 	Apps      map[string]App
 	mu        sync.RWMutex
 	reconnect time.Duration
+	logger    *slog.Logger
 }
 
 // Config holds configuration for the Agent.
@@ -41,25 +43,27 @@ type Config struct {
 
 // New creates a new Agent.
 func New(cfg Config) (*Agent, error) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	
 	var d Docker
 
 	if cfg.Mock {
 		d = &MockDocker{}
-		log.Println("Forcing Mock Docker client via config")
+		logger.Info("Forcing Mock Docker client via config")
 	} else {
 		var err error
 		d, err = NewDockerClient()
 		if err != nil {
-			log.Printf("failed to create docker client: %v, using mock", err)
+			logger.Warn("failed to create docker client, using mock", "error", err)
 			d = &MockDocker{}
 		} else {
 			// Test connection
 			apps, err := d.Scan(context.Background())
 			if err != nil {
-				log.Printf("Docker client failed (%v), falling back to mock for testing", err)
+				logger.Warn("Docker client failed, falling back to mock for testing", "error", err)
 				d = &MockDocker{}
 			} else {
-				log.Printf("Docker client connected. Found %d apps.", len(apps))
+				logger.Info("Docker client connected", "apps_found", len(apps))
 			}
 		}
 	}
@@ -73,12 +77,13 @@ func New(cfg Config) (*Agent, error) {
 		Docker:    d,
 		Apps:      make(map[string]App),
 		reconnect: 3 * time.Second,
+		logger:    logger.With("component", "agent", "agent_id", cfg.ID),
 	}, nil
 }
 
 // Run starts the agent loop.
 func (a *Agent) Run(ctx context.Context) error {
-	log.Printf("starting agent %s (%s)", a.Name, a.ID)
+	a.logger.Info("starting agent", "name", a.Name)
 
 	// Start server (health + proxy)
 	go a.serve()
@@ -89,7 +94,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return nil
 		default:
 			if err := a.connectAndServe(ctx); err != nil {
-				log.Printf("connection error: %v", err)
+				a.logger.Error("connection error", "error", err)
 			}
 			select {
 			case <-ctx.Done():
@@ -135,15 +140,15 @@ func (a *Agent) serve() {
 
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
 		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
-			log.Printf("proxy error for %s: %v", appName, err)
+			a.logger.Error("proxy error", "app", appName, "error", err)
 			http.Error(rw, "bad gateway", http.StatusBadGateway)
 		}
 		proxy.ServeHTTP(w, r)
 	})
 
-	log.Printf("agent server listening on %s", a.Addr)
+	a.logger.Info("agent server listening", "addr", a.Addr)
 	if err := http.ListenAndServe(a.Addr, mux); err != nil {
-		log.Printf("agent server failed: %v", err)
+		a.logger.Error("agent server failed", "error", err)
 	}
 }
 
@@ -164,7 +169,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	}
 	a.mu.Unlock()
 	
-	log.Printf("found apps: %v", appNames)
+	a.logger.Info("found apps", "apps", appNames)
 
 	u, err := url.Parse(a.HubAddr)
 	if err != nil {
@@ -176,7 +181,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 		header.Set("X-Nudged-Secret", a.Secret)
 	}
 
-	log.Printf("connecting to %s", u.String())
+	a.logger.Info("connecting to hub", "url", u.String())
 	c, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return err
@@ -193,7 +198,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	if err := c.WriteJSON(ident); err != nil {
 		return fmt.Errorf("write ident failed: %w", err)
 	}
-	log.Printf("registered with hub")
+	a.logger.Info("registered with hub")
 
 	// Read loop
 	done := make(chan struct{})
@@ -202,7 +207,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 		for {
 			var msg map[string]any
 			if err := c.ReadJSON(&msg); err != nil {
-				log.Printf("read error: %v", err)
+				a.logger.Error("read error", "error", err)
 				return
 			}
 			a.handleMessage(ctx, c, msg)
@@ -219,7 +224,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 }
 
 func (a *Agent) handleMessage(ctx context.Context, c *websocket.Conn, msg map[string]any) {
-	log.Printf("recv: %v", msg)
+	a.logger.Debug("recv", "msg", msg)
 	
 	typ, _ := msg["type"].(string)
 	switch typ {
@@ -228,13 +233,13 @@ func (a *Agent) handleMessage(ctx context.Context, c *websocket.Conn, msg map[st
 		if app, ok := a.Apps[appName]; ok {
 			go a.wakeApp(ctx, c, app)
 		} else {
-			log.Printf("unknown app to wake: %s", appName)
+			a.logger.Warn("unknown app to wake", "app", appName)
 		}
 	}
 }
 
 func (a *Agent) wakeApp(ctx context.Context, c *websocket.Conn, app App) {
-	log.Printf("waking app %s (container %s)...", app.Name, app.ContainerID)
+	a.logger.Info("waking app", "app", app.Name, "container_id", app.ContainerID)
 	
 	// Send STARTING status
 	_ = c.WriteJSON(map[string]any{
@@ -244,7 +249,7 @@ func (a *Agent) wakeApp(ctx context.Context, c *websocket.Conn, app App) {
 	})
 
 	if err := a.Docker.StartContainer(ctx, app.ContainerID); err != nil {
-		log.Printf("failed to start container %s: %v", app.Name, err)
+		a.logger.Error("failed to start container", "app", app.Name, "error", err)
 		_ = c.WriteJSON(map[string]any{
 			"type": "status",
 			"app":  app.Name,
@@ -262,7 +267,7 @@ func (a *Agent) wakeApp(ctx context.Context, c *websocket.Conn, app App) {
 			// Then check if port is open
 			if a.checkPort(ctx, app) {
 				// Send READY status
-				log.Printf("app %s is ready", app.Name)
+				a.logger.Info("app is ready", "app", app.Name)
 				_ = c.WriteJSON(map[string]any{
 					"type": "status",
 					"app":  app.Name,
@@ -276,6 +281,7 @@ func (a *Agent) wakeApp(ctx context.Context, c *websocket.Conn, app App) {
 	}
 
 	// Timeout
+	a.logger.Warn("app wake timeout", "app", app.Name)
 	_ = c.WriteJSON(map[string]any{
 		"type": "status",
 		"app":  app.Name,

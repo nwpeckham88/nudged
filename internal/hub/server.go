@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -19,7 +20,10 @@ import (
 // Start runs the server core. It returns when the provided context is
 // cancelled (graceful shutdown).
 func Start(ctx context.Context, addr string) error {
-	fmt.Println("starting server and hub")
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
+	logger.Info("starting server and hub", "version", "0.1.0")
 	h := New()
 
 	// quick smoke: subscribe and publish
@@ -33,9 +37,9 @@ func Start(ctx context.Context, addr string) error {
 
 	select {
 	case msg := <-sub:
-		fmt.Printf("hub smoke received: %v\n", msg.Payload)
+		logger.Debug("hub smoke received", "payload", msg.Payload)
 	case <-time.After(500 * time.Millisecond):
-		fmt.Println("hub smoke timeout")
+		logger.Warn("hub smoke timeout")
 	}
 
 	// start HTTP status endpoint
@@ -341,16 +345,18 @@ func Start(ctx context.Context, addr string) error {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	logger.Info("server listening", "addr", addr)
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("shutting down server")
+			logger.Info("shutting down server")
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_ = srv.Shutdown(shutCtx)
 			return nil
 		case err := <-serverErr:
 			if err != nil {
+				logger.Error("server error", "error", err)
 				return err
 			}
 		case <-ticker.C:
