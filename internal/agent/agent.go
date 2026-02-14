@@ -15,6 +15,24 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+	agentRunningApps = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "nudged_agent_running_apps",
+		Help: "Number of apps currently in RUNNING state",
+	})
+	agentProxiedRequestsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "nudged_agent_proxied_requests_total",
+		Help: "Total requests proxied to containers",
+	})
+	agentContainerStartsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "nudged_agent_container_starts_total",
+		Help: "Total successful container starts",
+	})
 )
 
 // App represents a containerized application managed by Nudged.
@@ -127,8 +145,12 @@ func (a *Agent) serve() {
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": a.ID, "status": "ok"})
 	})
 
+	// Metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+
 	// Proxy logic: forward requests to the appropriate container
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		agentProxiedRequestsTotal.Inc()
 		host := r.Host
 		if idx := strings.Index(host, ":"); idx != -1 {
 			host = host[:idx]
@@ -301,6 +323,7 @@ func (a *Agent) wakeApp(ctx context.Context, c *websocket.Conn, app App) {
 		})
 		return
 	}
+	agentContainerStartsTotal.Inc()
 
 	// Wait for readiness (check TCP port)
 	for i := 0; i < 30; i++ {
@@ -357,33 +380,28 @@ func (a *Agent) checkIdle(ctx context.Context) {
 	}
 	a.mu.RUnlock()
 
+	runningCount := 0
 	for _, app := range appsToCheck {
-		if app.Timeout == 0 {
-			continue
-		}
+		// Always check if running to update gauge
+		running, err := a.Docker.IsRunning(ctx, app.ContainerID)
+		if err == nil && running {
+			runningCount++
+			if app.Timeout == 0 {
+				continue
+			}
 
-		// We check LastActivity again under lock if we were going to modify it,
-		// but here we just read it. However, it might be updated concurrently.
-		// A read race is mostly benign here (might stop slightly later).
-		// But let's be safe and re-read from map if needed, or just use the copy.
-		// Using the copy is fine; if activity happened *just now*, we might stop it,
-		// but that's a race condition anyway. 
-		// Actually, if a request comes in *while* we are stopping, that's bad.
-		// But for now, simple implementation.
-
-		if time.Since(app.LastActivity) > app.Timeout {
-			// Check if running
-			running, err := a.Docker.IsRunning(ctx, app.ContainerID)
-			if err == nil && running {
+			if time.Since(app.LastActivity) > app.Timeout {
 				a.logger.Info("app idle timeout reached, stopping", "app", app.Name, "timeout", app.Timeout)
 				if err := a.Docker.StopContainer(ctx, app.ContainerID); err != nil {
 					a.logger.Error("failed to stop idle app", "app", app.Name, "error", err)
 				} else {
 					a.logger.Info("app stopped", "app", app.Name)
+					runningCount-- // Decrement as we just stopped it
 				}
 			}
 		}
 	}
+	agentRunningApps.Set(float64(runningCount))
 }
 
 func (a *Agent) checkPort(ctx context.Context, app App) bool {

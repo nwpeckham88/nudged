@@ -15,6 +15,24 @@ import (
 
 	"github.com/gorilla/websocket"
 	webui "github.com/nwpeckham88/nudged/internal/webui"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+	hubConnectedAgents = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "nudged_hub_connected_agents",
+		Help: "Number of currently connected agents",
+	})
+	hubRequestsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "nudged_hub_requests_total",
+		Help: "Total HTTP requests handled by Hub",
+	})
+	hubWakeRequestsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "nudged_hub_wake_requests_total",
+		Help: "Total wake requests triggered",
+	})
 )
 
 // Start runs the server core. It returns when the provided context is
@@ -87,6 +105,9 @@ func Start(ctx context.Context, addr string) error {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+
 	// POST /agents - register or update an agent
 	mux.HandleFunc("/agents", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -107,6 +128,7 @@ func Start(ctx context.Context, addr string) error {
 
 			reg.mu.Lock()
 			reg.agents[a.ID] = &a
+			hubConnectedAgents.Set(float64(len(reg.agents)))
 			reg.mu.Unlock()
 			w.WriteHeader(http.StatusOK)
 			return
@@ -184,6 +206,7 @@ func Start(ctx context.Context, addr string) error {
 
 		reg.mu.Lock()
 		reg.agents[ag.ID] = ag
+		hubConnectedAgents.Set(float64(len(reg.agents)))
 		reg.mu.Unlock()
 
 		// keep connection alive and update LastSeen; remove on close
@@ -206,11 +229,12 @@ func Start(ctx context.Context, addr string) error {
 					// For this implementation, let's just follow the existing memory pattern but don't delete from DB
 					// so it survives restart if it reconnects quickly.
 					// However, the `reg.agents` map is the source of truth for "online" agents for routing.
-					delete(reg.agents, id)
-				}
+				delete(reg.agents, id)
+				hubConnectedAgents.Set(float64(len(reg.agents)))
 				reg.mu.Unlock()
 			}()
 
+			for {
 			for {
 				var msg map[string]any
 				if err := c.ReadJSON(&msg); err != nil {
@@ -296,6 +320,7 @@ func Start(ctx context.Context, addr string) error {
 		}
 
 		// send WAKE
+		hubWakeRequestsTotal.Inc()
 		reg.mu.RLock()
 		conn := target.Conn
 		reg.mu.RUnlock()
@@ -310,6 +335,7 @@ func Start(ctx context.Context, addr string) error {
 
 	// Core HTTP proxy: inspect Host header (subdomain) and proxy to registered agent
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		hubRequestsTotal.Inc()
 		host := r.Host
 		// strip port if present
 		if idx := strings.Index(host, ":"); idx != -1 {
@@ -359,6 +385,7 @@ func Start(ctx context.Context, addr string) error {
 
 		// if proxying fails (e.g., agent container down), we trigger a wake and show splash
 		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+			hubWakeRequestsTotal.Inc()
 			// send WAKE to the agent if websocket connection is present
 			reg.mu.RLock()
 			conn := target.Conn

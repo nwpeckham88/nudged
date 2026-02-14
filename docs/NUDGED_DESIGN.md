@@ -1,6 +1,6 @@
 # Project Design Document: Nudged
 
-**Version:** 1.3.0 · **Status:** Draft
+**Version:** 1.4.0 · **Status:** Draft
 
 ## 1. Executive Summary
 
@@ -153,8 +153,8 @@ Phase 3 — Mesh & Security [Completed]
 Phase 4 — Hardening & Persistence
 - Add SQLite persistence for Hub registry. [Completed]
 - Add structured logging. [Completed]
-- Add "Stop" functionality (idle timeout). [Next]
-- Add metrics (Prometheus).
+- Add "Stop" functionality (idle timeout). [Completed]
+- Add metrics (Prometheus). [Next]
 
 ## 7. Security Considerations
 
@@ -186,6 +186,7 @@ The Hub uses an SQLite database (`nudged.db`) to persist the registry.
 | GET | `/agents` | None* | List connected agents (*Auth in future) |
 | GET | `/apps` | None* | List known apps |
 | POST | `/wake?app=NAME` | None* | Manually wake an app |
+| GET | `/metrics` | None | Prometheus metrics |
 | GET | `/ws/notify?app=NAME`| None | WebSocket for splash screen updates |
 | GET | `/ws/register` | Secret | WebSocket for Agent registration |
 
@@ -195,6 +196,7 @@ The Hub uses an SQLite database (`nudged.db`) to persist the registry.
 |--------|------|------|-------------|
 | ANY | `/*` | None | Proxied traffic to container |
 | GET | `/health` | None | Agent health check |
+| GET | `/metrics` | None | Prometheus metrics |
 
 ## 11. Observability Strategy
 
@@ -203,7 +205,15 @@ The Hub uses an SQLite database (`nudged.db`) to persist the registry.
 - Fields: `component` (hub/agent), `trace_id`, `app`, `agent_id`, `error`.
 
 **Metrics (Planned):**
-- Prometheus endpoint at `/metrics`.
-- Counters: `http_requests_total`, `wake_requests_total`.
-- Gauges: `connected_agents`, `running_apps`.
-- Histograms: `wake_duration_seconds`.
+- Uses `github.com/prometheus/client_golang/prometheus`.
+- Exposed at `/metrics` on both Hub and Agent.
+
+**Hub Metrics:**
+- `nudged_hub_connected_agents` (Gauge): Number of currently connected agents.
+- `nudged_hub_requests_total` (Counter): Total HTTP requests handled by Hub.
+- `nudged_hub_wake_requests_total` (Counter): Total wake requests triggered.
+
+**Agent Metrics:**
+- `nudged_agent_running_apps` (Gauge): Number of apps currently in RUNNING state.
+- `nudged_agent_proxied_requests_total` (Counter): Total requests proxied to containers.
+- `nudged_agent_container_starts_total` (Counter): Total successful container starts.
