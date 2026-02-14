@@ -9,14 +9,8 @@ import (
 	"github.com/docker/docker/client"
 )
 
-		apps = append(apps, App{
-			Name:          name,
-			ContainerID:   c.ID,
-			ContainerName: strings.TrimPrefix(c.Names[0], "/"),
-			Port:          port,
-			Labels:        c.Labels,
-		})
-	}
+// Docker defines the interface for interacting with container runtime.
+type Docker interface {
 	Scan(ctx context.Context) ([]App, error)
 	StartContainer(ctx context.Context, containerID string) error
 	StopContainer(ctx context.Context, containerID string) error

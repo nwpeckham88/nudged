@@ -386,6 +386,8 @@ func (a *Agent) checkIdle(ctx context.Context) {
 		}
 	}
 }
+
+func (a *Agent) checkPort(ctx context.Context, app App) bool {
 	target := fmt.Sprintf("%s:%s", app.ContainerName, app.Port)
 	// If running in Mock mode, return true
 	if _, ok := a.Docker.(*MockDocker); ok {
