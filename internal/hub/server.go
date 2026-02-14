@@ -235,7 +235,6 @@ func Start(ctx context.Context, addr string) error {
 			}()
 
 			for {
-			for {
 				var msg map[string]any
 				if err := c.ReadJSON(&msg); err != nil {
 					return
