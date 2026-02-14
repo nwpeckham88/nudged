@@ -9,19 +9,17 @@ import (
 	"github.com/docker/docker/client"
 )
 
-// App represents a containerized application managed by Nudged.
-type App struct {
-	Name          string
-	ContainerID   string
-	ContainerName string
-	Port          string
-	Labels        map[string]string
-}
-
-// Docker defines the interface for interacting with container runtime.
-type Docker interface {
+		apps = append(apps, App{
+			Name:          name,
+			ContainerID:   c.ID,
+			ContainerName: strings.TrimPrefix(c.Names[0], "/"),
+			Port:          port,
+			Labels:        c.Labels,
+		})
+	}
 	Scan(ctx context.Context) ([]App, error)
 	StartContainer(ctx context.Context, containerID string) error
+	StopContainer(ctx context.Context, containerID string) error
 	IsRunning(ctx context.Context, containerID string) (bool, error)
 }
 
@@ -81,6 +79,12 @@ func (d *DockerClient) StartContainer(ctx context.Context, containerID string) e
 	return d.cli.ContainerStart(ctx, containerID, container.StartOptions{})
 }
 
+// StopContainer stops the container with the given ID.
+func (d *DockerClient) StopContainer(ctx context.Context, containerID string) error {
+	// Default timeout of 10s is usually fine
+	return d.cli.ContainerStop(ctx, containerID, container.StopOptions{})
+}
+
 // IsRunning checks if a container is running.
 func (d *DockerClient) IsRunning(ctx context.Context, containerID string) (bool, error) {
 	c, err := d.cli.ContainerInspect(ctx, containerID)
@@ -106,6 +110,10 @@ func (m *MockDocker) Scan(ctx context.Context) ([]App, error) {
 }
 
 func (m *MockDocker) StartContainer(ctx context.Context, containerID string) error {
+	return nil
+}
+
+func (m *MockDocker) StopContainer(ctx context.Context, containerID string) error {
 	return nil
 }
 

@@ -1,6 +1,6 @@
 # Project Design Document: Nudged
 
-**Version:** 1.2.0 · **Status:** Draft
+**Version:** 1.3.0 · **Status:** Draft
 
 ## 1. Executive Summary
 
@@ -21,7 +21,7 @@ Role: brain — single ingress point.
 
 Responsibilities:
 - Ingress proxy: Accepts incoming HTTP requests (behind Caddy).
-- State management: Registry of registered Agents and their Apps.
+- State management: Registry of registered Agents and their Apps (SQLite backed).
 - Splash screen: Serves "Waking Up" HTML while holding connections.
 - Routing: Proxies traffic to the correct Agent IP once app is ready.
 
@@ -34,6 +34,7 @@ Responsibilities:
 - Registration: Dial Hub via WebSocket to register capabilities/apps.
 - Health checks: Local checks (e.g., curl localhost:3000) before signaling readiness.
 - Interface binding: Listen only on the Netbird/VPN interface to prevent LAN leakage.
+- Idle Management: Tracks request activity and stops containers after a timeout.
 
 ## 3. Communication Protocol
 
@@ -81,7 +82,7 @@ Labels:
 nudged.enable=true        # Enlist the container
 nudged.port=3000          # Internal port for health checks
 nudged.name=plex          # Optional: custom Hub routing name (defaults to container name)
-nudged.timeout=30m        # Optional: idle time before stopping
+nudged.timeout=30m        # Optional: idle time before stopping (default: never)
 nudged.capability=transcode # Optional: for future scheduling
 ```
 
@@ -99,7 +100,18 @@ Flow:
 6. Browser refresh: Splash Screen receives "Ready" via WebSocket and reloads.
 7. Proxy: Hub proxies to `http://AGENT_IP:32400`.
 
-### 4.3 Resource Scheduling (Future "Mini-Swarm")
+### 4.3 Idle Timeout & Auto-Stop
+
+Agent tracks the last time a request was proxied to an app.
+
+- **Tracking**: Middleware in Agent's proxy server updates `LastActivity` timestamp on every request.
+- **Enforcement**: Background goroutine checks every 1 minute.
+- **Logic**: If `time.Now() - LastActivity > nudged.timeout`:
+  1. Agent stops the container (`docker stop`).
+  2. Agent sends `STATUS { "state": "STOPPED" }` to Hub (optional, mainly for UI updates).
+- **Default**: If `nudged.timeout` is missing, auto-stop is disabled.
+
+### 4.4 Resource Scheduling (Future "Mini-Swarm")
 
 Hub can choose where to run tasks if multiple Agents advertise the same capability.
 
@@ -115,6 +127,8 @@ Hub can choose where to run tasks if multiple Agents advertise the same capabili
 - Routing/HTTP: Go stdlib `net/http`
 - Configuration: Environment variables (`NUDGED_HUB_SECRET`, `NUDGED_HUB_URL`)
 - Networking: Agents run in host mode or bind directly to `tun0` to bridge Docker <-> VPN
+- Logging: `log/slog` (structured JSON)
+- Persistence: `modernc.org/sqlite` (Hub registry)
 
 ## 6. Implementation Roadmap
 
@@ -130,16 +144,17 @@ Phase 2 — Split (Hub & Agent) [Completed]
 - Test on LAN (Hub on desktop, Agent on laptop).
 - Goal: remote orchestration.
 
-Phase 3 — Mesh (Netbird) [Next]
+Phase 3 — Mesh & Security [Completed]
 - Deploy Hub to cloud/primary server behind Caddy.
 - Deploy Agents on remote machines over Netbird.
 - Implement explicit interface binding (`-bind-addr`).
 - Goal: zero-config remote management.
 
 Phase 4 — Hardening & Persistence
-- Add SQLite persistence for Hub registry.
-- Add structured logging and metrics.
-- Add "Stop" functionality (idle timeout).
+- Add SQLite persistence for Hub registry. [Completed]
+- Add structured logging. [Completed]
+- Add "Stop" functionality (idle timeout). [Next]
+- Add metrics (Prometheus).
 
 ## 7. Security Considerations
 
@@ -150,25 +165,18 @@ Phase 4 — Hardening & Persistence
 
 ## 8. Failure Modes
 
-- Agent offline: Hub removes Agent from registry; returns `503 Service Unavailable` (or custom error page).
+- Agent offline: Hub removes Agent from registry (memory) but keeps in DB; returns `503 Service Unavailable` (or custom error page).
 - App crash: If `docker start` fails, Agent reports `ERROR`; Hub displays error on Splash Screen.
 - Stuck waking: Splash Screen times out after 60s with a "Retry" button.
 - Route injection: If routing is compromised, connection fails (TLS error) or Agent rejects requests (invalid HMAC), protecting data.
 
-## 9. Data Persistence (Design)
+## 9. Data Persistence
 
-Currently, the Hub uses an in-memory registry. This is brittle; restarts cause a loss of known agents until they reconnect.
+The Hub uses an SQLite database (`nudged.db`) to persist the registry.
+- **Schema**: `agents` table storing ID, Name, Addr, LastSeen, and Apps (JSON).
+- **Behavior**: On startup, loads known agents. On registration, upserts agent state.
 
-**Proposal: SQLite**
-- Use `sqlite3` (via CGO or `modernc.org/sqlite` for pure Go).
-- Store:
-  - `agents`: ID, Name, LastSeen, SecretHash, IP.
-  - `apps`: Name, AgentID, Config.
-- On startup, load state.
-- On Agent connect, update DB.
-- Prune "dead" agents after N days, not immediately on disconnect (allow for flaky connections).
-
-## 10. API Specification (Draft)
+## 10. API Specification
 
 ### 10.1 Hub API (Public/Internal)
 
@@ -191,11 +199,10 @@ Currently, the Hub uses an in-memory registry. This is brittle; restarts cause a
 ## 11. Observability Strategy
 
 **Logging:**
-- Use `slog` (Go 1.21+ standard library).
-- JSON output in production, text in dev.
-- Fields: `component` (hub/agent), `trace_id`, `app`, `agent_id`.
+- Uses `slog` for structured JSON logging.
+- Fields: `component` (hub/agent), `trace_id`, `app`, `agent_id`, `error`.
 
-**Metrics:**
+**Metrics (Planned):**
 - Prometheus endpoint at `/metrics`.
 - Counters: `http_requests_total`, `wake_requests_total`.
 - Gauges: `connected_agents`, `running_apps`.
