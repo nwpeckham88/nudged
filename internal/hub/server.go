@@ -222,13 +222,13 @@ func Start(ctx context.Context, addr string) error {
 				// If we restart Hub, we load from DB. If Agent is offline, it won't reconnect.
 				// So we probably want to keep it in DB.
 				if agent, ok := reg.agents[id]; ok {
-					// Mark as disconnected in memory?
-					// The existing logic deletes it entirely.
-					// Let's stick to existing logic for now, but update store if we want persistence.
-					// Actually, if we delete from memory, we should probably keep in DB so it shows up as "offline" eventually?
-					// For this implementation, let's just follow the existing memory pattern but don't delete from DB
-					// so it survives restart if it reconnects quickly.
-					// However, the `reg.agents` map is the source of truth for "online" agents for routing.
+					agent.Conn = nil
+				}
+				// We don't delete from map so /agents still lists it (offline),
+				// but Conn is nil so routing fails or handles it.
+				// Wait, routing logic checks if target != nil.
+				// We should probably update routing logic to skip agents with nil Conn?
+				// Or better, just delete from map as before to keep "online" list clean.
 				delete(reg.agents, id)
 				hubConnectedAgents.Set(float64(len(reg.agents)))
 				reg.mu.Unlock()
