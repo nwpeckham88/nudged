@@ -24,6 +24,14 @@ func Start(ctx context.Context, addr string) error {
 	slog.SetDefault(logger)
 
 	logger.Info("starting server and hub", "version", "0.1.0")
+
+	// Initialize Store
+	store, err := NewStore("nudged.db")
+	if err != nil {
+		logger.Error("failed to init store", "error", err)
+		return err
+	}
+
 	h := New()
 
 	// quick smoke: subscribe and publish
@@ -58,7 +66,18 @@ func Start(ctx context.Context, addr string) error {
 		agents map[string]*Agent
 	}
 
-	reg := &Registry{agents: make(map[string]*Agent)}
+	// Load existing agents from store
+	storedAgents, err := store.LoadAgents()
+	if err != nil {
+		logger.Error("failed to load agents", "error", err)
+	} else {
+		logger.Info("loaded agents from store", "count", len(storedAgents))
+	}
+	if storedAgents == nil {
+		storedAgents = make(map[string]*Agent)
+	}
+
+	reg := &Registry{agents: storedAgents}
 
 	mux := http.NewServeMux()
 	// serve embedded web UI at /ui/
@@ -83,6 +102,14 @@ func Start(ctx context.Context, addr string) error {
 				return
 			}
 			a.LastSeen = time.Now().Unix()
+			
+			// Persist
+			if err := store.SaveAgent(&a); err != nil {
+				logger.Error("failed to save agent", "error", err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+
 			reg.mu.Lock()
 			reg.agents[a.ID] = &a
 			reg.mu.Unlock()
@@ -152,6 +179,14 @@ func Start(ctx context.Context, addr string) error {
 		}
 
 		ag := &Agent{ID: a.ID, Name: a.Name, Addr: a.Addr, Apps: a.Apps, LastSeen: time.Now().Unix(), Conn: conn}
+		
+		// Persist
+		if err := store.SaveAgent(ag); err != nil {
+			logger.Error("failed to save agent", "error", err)
+			conn.Close()
+			return
+		}
+
 		reg.mu.Lock()
 		reg.agents[ag.ID] = ag
 		reg.mu.Unlock()
@@ -161,7 +196,23 @@ func Start(ctx context.Context, addr string) error {
 			defer func() {
 				c.Close()
 				reg.mu.Lock()
-				delete(reg.agents, id)
+				// We don't necessarily delete from persistence here, just from memory if connection drops?
+				// For now, let's keep the behavior consistent: delete from memory map to indicate offline.
+				// But we keep in DB? Design doc said "Prune 'dead' agents after N days".
+				// So we leave in DB, but maybe update last_seen?
+				// The current in-memory map logic deletes it.
+				// If we restart Hub, we load from DB. If Agent is offline, it won't reconnect.
+				// So we probably want to keep it in DB.
+				if agent, ok := reg.agents[id]; ok {
+					// Mark as disconnected in memory?
+					// The existing logic deletes it entirely.
+					// Let's stick to existing logic for now, but update store if we want persistence.
+					// Actually, if we delete from memory, we should probably keep in DB so it shows up as "offline" eventually?
+					// For this implementation, let's just follow the existing memory pattern but don't delete from DB
+					// so it survives restart if it reconnects quickly.
+					// However, the `reg.agents` map is the source of truth for "online" agents for routing.
+					delete(reg.agents, id)
+				}
 				reg.mu.Unlock()
 			}()
 
@@ -175,6 +226,9 @@ func Start(ctx context.Context, addr string) error {
 				reg.mu.Lock()
 				if ag, ok := reg.agents[id]; ok {
 					ag.LastSeen = time.Now().Unix()
+					// We could update DB here but doing it on every message might be too much.
+					// Let's do it periodically or on significant events.
+					// For now, just memory.
 				}
 				reg.mu.Unlock()
 
