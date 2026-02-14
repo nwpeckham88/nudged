@@ -296,6 +296,14 @@ func Start(ctx context.Context, addr string) error {
 		targetURL := &url.URL{Scheme: "http", Host: target.Addr}
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
+		// Intercept 502/503 from Agent (indicating App is down) to trigger Splash Screen
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			if resp.StatusCode == http.StatusBadGateway || resp.StatusCode == http.StatusServiceUnavailable {
+				return fmt.Errorf("upstream app unavailable")
+			}
+			return nil
+		}
+
 		// if proxying fails (e.g., agent container down), we trigger a wake and show splash
 		proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 			// send WAKE to the agent if websocket connection is present
