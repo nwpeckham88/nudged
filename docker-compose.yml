@@ -37,5 +37,22 @@ services:
       - "nudged.enable=true"
       - "nudged.name=testsvc"
       - "nudged.port=80"
+      - "nudged.timeout=5m"
     restart: unless-stopped
     stop_signal: SIGQUIT
+
+  simsvc:
+    build:
+      context: .
+      dockerfile: cmd/sim-service/Dockerfile
+    image: nudged-sim:local
+    environment:
+      - STARTUP_DELAY=5s
+      - SHUTDOWN_DELAY=2s
+      - PORT=8080
+    labels:
+      - "nudged.enable=true"
+      - "nudged.name=simsvc"
+      - "nudged.port=8080"
+      - "nudged.timeout=30s" # Short timeout for testing
+    restart: unless-stopped

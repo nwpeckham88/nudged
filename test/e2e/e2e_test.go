@@ -35,8 +35,15 @@ func TestE2E(t *testing.T) {
 		t.Fatalf("Hub not healthy: %v", err)
 	}
 
+	// Run Subtests
+	t.Run("Nginx_HappyPath", testNginxHappyPath)
+	t.Run("Nginx_Wake", testNginxWake)
+	t.Run("SimService_Lifecycle", testSimServiceLifecycle)
+}
+
+func testNginxHappyPath(t *testing.T) {
 	// 3. Wait for Agent Registration
-	t.Log("Waiting for Agent to register...")
+	t.Log("Waiting for Agent to register testsvc...")
 	if err := waitForAgent("testsvc", 30*time.Second); err != nil {
 		t.Fatalf("Agent registration failed: %v", err)
 	}
@@ -50,20 +57,19 @@ func TestE2E(t *testing.T) {
 	if !strings.Contains(content, "Welcome to nginx!") {
 		t.Errorf("Unexpected content from nginx: %s", content[:100])
 	}
+}
 
+func testNginxWake(t *testing.T) {
 	// 5. Test Wake (Stop -> Request -> Wake -> Verify)
 	t.Log("Testing Wake-on-Request...")
 	
 	// Stop the test service container
-	// We need to find the container name. docker-compose usually names it nudged-testsvc-1 or similar.
-	// But we can use docker compose stop
 	t.Log("Stopping testsvc...")
 	if err := exec.Command("docker", "compose", "-f", "../../docker-compose.yml", "stop", "testsvc").Run(); err != nil {
 		t.Fatalf("Failed to stop testsvc: %v", err)
 	}
 
-	// Verify it's stopped (proxy should return splash screen or 503, currently splash screen with 200 OK)
-	// The Hub code: proxy.ErrorHandler -> responds 200 OK with splash HTML
+	// Verify it's stopped (proxy should return splash screen or 503)
 	t.Log("Verifying splash screen...")
 	splashContent, err := fetchWithHost("http://localhost:8080/", "testsvc.localhost")
 	if err != nil {
@@ -104,8 +110,83 @@ func TestE2E(t *testing.T) {
 	if !recovered {
 		t.Fatal("Service did not recover after wake")
 	}
+}
 
-	t.Log("E2E Test Passed!")
+func testSimServiceLifecycle(t *testing.T) {
+	// Wait for registration
+	if err := waitForAgent("simsvc", 30*time.Second); err != nil {
+		t.Fatalf("Agent registration failed for simsvc: %v", err)
+	}
+
+	// Stop simsvc to test Wake + Slow Startup
+	t.Log("Stopping simsvc...")
+	if err := exec.Command("docker", "compose", "-f", "../../docker-compose.yml", "stop", "simsvc").Run(); err != nil {
+		t.Fatalf("Failed to stop simsvc: %v", err)
+	}
+
+	// Verify Splash
+	t.Log("Verifying splash screen for simsvc...")
+	splashContent, err := fetchWithHost("http://localhost:8080/", "simsvc.localhost")
+	if err != nil {
+		t.Fatalf("Failed to fetch splash: %v", err)
+	}
+	if !strings.Contains(splashContent, "Waking simsvc") {
+		t.Errorf("Expected splash screen, got: %s", splashContent)
+	}
+
+	// Trigger Wake
+	t.Log("Triggering wake for simsvc...")
+	resp, err := http.Post("http://localhost:8080/wake?app=simsvc", "text/plain", nil)
+	if err != nil {
+		t.Fatalf("Failed to wake simsvc: %v", err)
+	}
+	resp.Body.Close()
+
+	// Poll for readiness (should take at least 5s due to STARTUP_DELAY)
+	t.Log("Waiting for simsvc to start (expect >5s delay)...")
+	start := time.Now()
+	
+	ready := false
+	for time.Since(start) < 20*time.Second {
+		content, err := fetchWithHost("http://localhost:8080/", "simsvc.localhost")
+		if err == nil && strings.Contains(content, "Sim Service Ready") {
+			ready = true
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	if !ready {
+		t.Fatal("simsvc did not become ready within timeout")
+	}
+
+	duration := time.Since(start)
+	t.Logf("simsvc became ready in %v", duration)
+	if duration < 5*time.Second {
+		t.Errorf("simsvc started too fast (%v), expected >5s delay", duration)
+	}
+
+	// Test Idle Timeout
+	// nudged.timeout is set to 30s in docker-compose.
+	t.Log("Waiting for idle timeout (30s)...")
+	// We wait 35s to be sure
+	time.Sleep(35 * time.Second)
+
+	// Verify it's stopped.
+	t.Log("Verifying simsvc is stopped...")
+	splashContent, err = fetchWithHost("http://localhost:8080/", "simsvc.localhost")
+	if err != nil {
+		t.Fatalf("Failed to fetch after idle: %v", err)
+	}
+	if !strings.Contains(splashContent, "Waking simsvc") {
+		if strings.Contains(splashContent, "Sim Service Ready") {
+			t.Error("simsvc is still running after idle timeout")
+		} else {
+			t.Errorf("Expected splash screen, got: %s", splashContent)
+		}
+	} else {
+		t.Log("Idle timeout verified: Service stopped.")
+	}
 }
 
 func waitForURL(url string, timeout time.Duration) error {
